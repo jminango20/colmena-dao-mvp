@@ -16,8 +16,7 @@ abstract contract BaseCertificateNFT is ERC721, Ownable {
         string region;               // Região genérica (não GPS exato)
         uint256 quantity;            // Quantidade produzida
         string quantityUnit;         // Unidade (KG, L, etc)
-        string evidenceCID;          // IPFS CID com evidências (fotos, checklist)
-        string labReportCID;         // IPFS CID com laudo laboratorial
+        string documentsFolderCID;   // Carpeta IPFS con TODOS los documentos (laudo, fotos, certificados, etc)
         uint256 harvestDate;         // Data da colheita (timestamp)
         uint256 issuedDate;          // Data de emissão do certificado (timestamp)
         address issuer;              // Quem emitiu (entreposto)
@@ -146,8 +145,7 @@ abstract contract BaseCertificateNFT is ERC721, Ownable {
         require(producer != address(0), "Invalid producer address");
         require(bytes(baseCert.batchId).length > 0, "Batch ID required");
         require(baseCert.quantity > 0, "Quantity must be > 0");
-        require(bytes(baseCert.evidenceCID).length > 0, "Evidence CID required");
-        require(bytes(baseCert.labReportCID).length > 0, "Lab report CID required");
+        require(bytes(baseCert.documentsFolderCID).length > 0, "Documents CID required");
         
         // Gera novo token ID
         uint256 tokenId = _nextTokenId;
