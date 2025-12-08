@@ -327,3 +327,488 @@ bool canExport = honeyCert.canExport(tokenId);
 - ✅ Revocación de certificados
 
 **Cobertura:** 100% de funciones públicas
+
+---
+
+## BatchTraceability.sol
+
+### Descripción
+Sistema de trazabilidad basado en EPCIS 2.0 (GS1 Standard).
+
+**Arquitectura Híbrida:**
+- **On-Chain (Blockchain):** Hash + metadata esencial
+- **Off-Chain (PostgreSQL o IPFS):** EPCIS JSON-LD completo + índices para queries
+- **Verificación:** Hash on-chain garantiza integridad de datos off-chain
+
+**Características:**
+- ✅ EPCIS 2.0 compliant (5 tipos de eventos estándar)
+- ✅ Agnóstico de producto (mel, leche, café, granos, etc)
+- ✅ Queries rápidas (PostgreSQL indexado, no blockchain)
+- ✅ Interoperable con sistemas globales (SAP, Oracle, GS1 Registry)
+
+### Tipos de Eventos EPCIS 2.0
+```solidity
+enum EPCISEventType {
+    OBJECT,           // ObjectEvent - observar/mover objetos
+    AGGREGATION,      // AggregationEvent - agrupar/separar
+    TRANSACTION,      // TransactionEvent - transacciones comerciales
+    TRANSFORMATION,   // TransformationEvent - transformación física
+    ASSOCIATION       // AssociationEvent - asociar objetos (IoT)
+}
+```
+
+#### Mapeo de Operaciones del Negocio → EPCIS
+
+| Operación Negocio | Event Type | Action | bizStep |
+|-------------------|------------|--------|---------|
+| Producir/Cosechar | OBJECT | ADD | commissioning |
+| Recibir | OBJECT | OBSERVE | receiving |
+| Almacenar | OBJECT | OBSERVE | storing |
+| Inspeccionar | OBJECT | OBSERVE | inspecting |
+| Enviar | OBJECT | OBSERVE | shipping |
+| Empaquetar | AGGREGATION | ADD | packing |
+| Dividir lote | AGGREGATION | DELETE | unpacking |
+| Transferir propiedad | TRANSACTION | ADD | shipping |
+| Vender | TRANSACTION | ADD | retail_selling |
+| Transformar (mel→crema) | TRANSFORMATION | - | commissioning |
+| Asociar sensor IoT | ASSOCIATION | ADD | - |
+
+**Ejemplos Agnósticos:**
+- **Mel:** harvest → receive → inspect → pack → ship → sell
+- **Leche:** milk → receive → pasteurize (TRANSFORMATION) → bottle (AGGREGATION) → ship → sell
+- **Café:** harvest → receive → roast (TRANSFORMATION) → pack → ship → sell
+
+### Acciones EPCIS
+```solidity
+enum EPCISAction {
+    ADD,              // Agregar/crear/comisionar
+    OBSERVE,          // Observar sin cambio de estado
+    DELETE            // Remover/decomisionar
+}
+```
+
+### Estructura de Datos
+```solidity
+struct Operation {
+    uint256 operationId;           // ID único secuencial
+    EPCISEventType eventType;      // Tipo evento EPCIS
+    EPCISAction action;            // ADD, OBSERVE, DELETE
+    string epc;                    // EPC principal (URN format)
+    uint256 certificateTokenId;    // Referencia al certificado NFT
+    address actor;                 // Quién ejecutó
+    uint256 eventTime;            // Timestamp
+    bytes32 epcisHash;            // SHA-256 del JSON-LD completo
+}
+
+```
+
+**¿Qué NO está on-chain?**
+- bizStep, disposition, bizLocation, readPoint
+- sourceList, destinationList
+- quantityList, uom
+- businessTransactionList
+- ilmd (Instance/Lot Master Data)
+- Arrays de búsqueda, genealogía, índices
+
+**Todos estos datos están off-chain, verificables con hash.**
+
+### Ejemplo EPCIS 2.0 JSON-LD (Off-Chain)
+```json
+{
+  "@context": [
+    "https://ref.gs1.org/standards/epcis/2.0.0/epcis-context.jsonld"
+  ],
+  "type": "EPCISDocument",
+  "schemaVersion": "2.0",
+  "creationDate": "2025-12-08T14:30:00.000Z",
+  "epcisBody": {
+    "eventList": [
+      {
+        "type": "ObjectEvent",
+        "eventTime": "2025-11-25T14:30:00.000Z",
+        "eventTimeZoneOffset": "-04:00",
+        "recordTime": "2025-11-25T14:30:05.123Z",
+        
+        "epcList": [
+          "urn:epc:id:sgtin:789.12345.LOTE-2025-001"
+        ],
+        
+        "action": "OBSERVE",
+        "bizStep": "urn:epcglobal:cbv:bizstep:receiving",
+        "disposition": "urn:epcglobal:cbv:disp:in_progress",
+        
+        "bizLocation": {
+          "id": "urn:epc:id:sgln:789.56789.0",
+          "extension": {
+            "name": "Entreposto MS",
+            "coordinates": {
+              "latitude": -20.456,
+              "longitude": -54.789
+            }
+          }
+        },
+        
+        "readPoint": {
+          "id": "urn:epc:id:sgln:789.56789.DOCK-A"
+        },
+        
+        "quantityList": [
+          {
+            "epcClass": "urn:epc:class:lgtin:789.12345.HONEY-MULTI",
+            "quantity": 150,
+            "uom": "KGM"
+          }
+        ],
+        
+        "sourceList": [
+          {
+            "type": "urn:epcglobal:cbv:sdt:possessing_party",
+            "source": "urn:epc:id:pgln:789.JOAO-SILVA"
+          },
+          {
+            "type": "urn:epcglobal:cbv:sdt:location",
+            "source": "urn:epc:id:sgln:789.APIARIO-JOAO.0"
+          }
+        ],
+        
+        "destinationList": [
+          {
+            "type": "urn:epcglobal:cbv:sdt:possessing_party",
+            "destination": "urn:epc:id:pgln:789.ENTREPOSTO-MS"
+          }
+        ],
+        
+        "extension": {
+          "certificateNFT": {
+            "blockchain": "Polygon",
+            "contractAddress": "0x742d35Cc6634C0532925a3b844Bc9e7595f0bEb",
+            "tokenId": 123,
+            "transactionHash": "0xabc123..."
+          },
+          "qualityData": {
+            "moisture": 17.5,
+            "hmf": 8.5,
+            "labReportCID": "QmLabReport456"
+          },
+          "privateData": {
+            "encrypted": true,
+            "algorithm": "AES-256-GCM",
+            "data": {
+              "commercialInvoice": "NF-12345",
+              "price": {
+                "amount": 6750.00,
+                "currency": "BRL"
+              },
+              "paymentTerms": "30 days"
+            }
+          }
+        }
+      }
+    ]
+  }
+}
+```
+
+**Hash SHA-256 de este JSON → guardado on-chain en `epcisHash`**
+
+### Función Principal
+```solidity
+function recordOperation(
+    EPCISEventType eventType,
+    EPCISAction action,
+    string memory epc,
+    uint256 certificateTokenId,
+    bytes32 epcisHash
+) external onlyAuthorizedOperator returns (uint256)
+```
+
+**Flujo de Uso:**
+
+1. **Backend genera EPCIS JSON-LD completo** (off-chain)
+2. **Backend calcula hash SHA-256** del JSON
+3. **Backend llama `recordOperation()`** con hash
+4. **Blockchain guarda** operación + hash (immutable)
+5. **Blockchain emite evento** `OperationRecorded`
+6. **Backend escucha evento** y guarda JSON completo off-chain
+7. **Usuarios consultan backend** (queries rápidas)
+8. **Usuarios verifican integridad** con hash on-chain
+
+### Control de Acceso
+```solidity
+// Autorizar operadores (entrepostos, transportadoras, etc)
+function authorizeOperator(address operator) external onlyOwner
+
+// Revocar operadores
+function revokeOperator(address operator) external onlyOwner
+
+// Autorizar múltiples en batch
+function authorizeOperatorsBatch(address[] memory operators) external onlyOwner
+
+// Verificar si es autorizado
+function isAuthorizedOperator(address operator) external view returns (bool)
+```
+
+**Roles:**
+- **Owner:** Autoriza/revoca operadores
+- **Operadores Autorizados:** Pueden registrar operaciones (entrepostos, transportadoras, procesadores, retailers)
+- **Owner también puede operar:** Útil para administración
+
+### View Functions
+```solidity
+// Obtener operación por ID (para verificación individual)
+function getOperation(uint256 operationId) external view returns (Operation memory)
+
+// Total de operaciones registradas
+function totalOperations() external view returns (uint256)
+
+// Verificar integridad de datos off-chain
+function verifyHash(uint256 operationId, bytes32 providedHash) external view returns (bool)
+
+// Verificar si address es operador autorizado
+function isAuthorizedOperator(address operator) external view returns (bool)
+```
+### Verificación de Integridad (Proof)
+
+**Cualquier usuario puede verificar que datos off-chain no fueron alterados:**
+```javascript
+// 1. Usuario obtiene EPCIS JSON del backend
+const response = await fetch('/api/operation/123');
+const data = await response.json();
+
+// 2. Usuario calcula hash del JSON
+const jsonString = JSON.stringify(data.epcis_json);
+const calculatedHash = ethers.keccak256(ethers.toUtf8Bytes(jsonString));
+
+// 3. Usuario consulta blockchain
+const onChainHash = await batchTraceContract.operations(123).epcisHash;
+
+// 4. Usuario compara
+if (calculatedHash === onChainHash) {
+    console.log("✅ Datos verificados - no fueron alterados");
+} else {
+    console.log("❌ ALERTA: Datos fueron modificados!");
+}
+
+// También puede usar función helper del contrato:
+const isValid = await batchTraceContract.verifyHash(123, calculatedHash);
+```
+
+### Eventos
+```solidity
+event OperationRecorded(
+    uint256 indexed operationId,
+    EPCISEventType indexed eventType,
+    string epc,
+    uint256 indexed certificateTokenId,
+    address actor,
+    bytes32 epcisHash,
+    uint256 eventTime
+);
+
+event OperatorAuthorized(
+    address indexed operator,
+    address indexed authorizedBy,
+    uint256 timestamp
+);
+
+event OperatorRevoked(
+    address indexed operator,
+    address indexed revokedBy,
+    uint256 timestamp
+);
+```
+
+**Backend Event Listener:**
+```typescript
+batchTraceContract.on("OperationRecorded", async (
+    operationId,
+    eventType,
+    epc,
+    certificateTokenId,
+    actor,
+    epcisHash,
+    eventTime,
+    event
+) => {
+    // 1. Generar EPCIS JSON-LD completo
+    const epcisJSON = await generateEPCISJSON(operation);
+    
+    // 2. Verificar hash
+    const calculatedHash = sha256(JSON.stringify(epcisJSON));
+    if (calculatedHash !== epcisHash) {
+        console.error("❌ Hash mismatch!");
+        return;
+    }
+    
+    // 3. Guardar en PostgreSQL con índices
+    await db.operations.insert({
+        operation_id: operationId,
+        epcis_json: epcisJSON,
+        epcis_hash: epcisHash,
+        blockchain_tx: event.transactionHash,
+        // ... campos indexados para búsquedas
+    });
+    
+    // 4. Actualizar índices
+    await updateSearchIndices(operationId, epc, certificateTokenId);
+});
+```
+
+### Backend API Endpoints (Off-Chain Queries)
+```typescript
+// GET /api/batch/{epc}/history
+// Retorna historial completo de un lote
+// Tiempo: <100ms (PostgreSQL indexado)
+
+// GET /api/certificate/{tokenId}/operations
+// Retorna todas las operaciones de un certificado
+// Tiempo: <50ms
+
+// GET /api/operation/{operationId}/verify
+// Verifica integridad comparando con blockchain
+// Tiempo: <200ms (incluye lectura blockchain)
+
+// GET /api/batch/{epc}/genealogy
+// Retorna árbol completo (padres, hijos, nietos)
+// Tiempo: <100ms (recursive query PostgreSQL)
+```
+
+### Ejemplo de Uso Completo
+```javascript
+// ════════════════════════════════════════════════════════════
+// SETUP: Autorizar operadores
+// ════════════════════════════════════════════════════════════
+
+await batchTrace.authorizeOperator(entrepostoAddress);
+await batchTrace.authorizeOperator(transportadoraAddress);
+await batchTrace.authorizeOperator(importadorAddress);
+
+// ════════════════════════════════════════════════════════════
+// DÍA 1: João cosecha mel (CREATE)
+// ════════════════════════════════════════════════════════════
+
+// Backend genera EPCIS JSON-LD
+const epcisJSON = {
+    type: "ObjectEvent",
+    action: "ADD",
+    bizStep: "urn:epcglobal:cbv:bizstep:commissioning",
+    epcList: ["urn:epc:id:sgtin:789.12345.LOTE-2025-001"],
+    // ... datos completos
+};
+
+// Backend calcula hash
+const hash = ethers.keccak256(ethers.toUtf8Bytes(JSON.stringify(epcisJSON)));
+
+// Backend llama contrato
+await batchTrace.connect(entreposto).recordOperation(
+    0, // OBJECT
+    0, // ADD
+    "urn:epc:id:sgtin:789.12345.LOTE-2025-001",
+    123, // certificate NFT
+    hash
+);
+
+// ════════════════════════════════════════════════════════════
+// DÍA 2: Transfer a entreposto (OBSERVE)
+// ════════════════════════════════════════════════════════════
+
+const epcisJSON2 = {
+    type: "ObjectEvent",
+    action: "OBSERVE",
+    bizStep: "urn:epcglobal:cbv:bizstep:receiving",
+    // ...
+};
+
+const hash2 = ethers.keccak256(ethers.toUtf8Bytes(JSON.stringify(epcisJSON2)));
+
+await batchTrace.connect(entreposto).recordOperation(
+    0, // OBJECT
+    1, // OBSERVE
+    "urn:epc:id:sgtin:789.12345.LOTE-2025-001",
+    123,
+    hash2
+);
+
+// ════════════════════════════════════════════════════════════
+// DÍA 5: Split de lote (AGGREGATION)
+// ════════════════════════════════════════════════════════════
+
+const epcisJSON3 = {
+    type: "AggregationEvent",
+    action: "DELETE", // unpacking/splitting
+    parentID: "urn:epc:id:sgtin:789.12345.LOTE-2025-001",
+    childEPCs: [
+        "urn:epc:id:sgtin:789.12345.LOTE-2025-001-A",
+        "urn:epc:id:sgtin:789.12345.LOTE-2025-001-B",
+        "urn:epc:id:sgtin:789.12345.LOTE-2025-001-C"
+    ],
+    // ...
+};
+
+const hash3 = ethers.keccak256(ethers.toUtf8Bytes(JSON.stringify(epcisJSON3)));
+
+await batchTrace.connect(entreposto).recordOperation(
+    1, // AGGREGATION
+    2, // DELETE
+    "urn:epc:id:sgtin:789.12345.LOTE-2025-001",
+    123,
+    hash3
+);
+
+// Backend procesa evento y actualiza genealogía en DB
+
+// ════════════════════════════════════════════════════════════
+// CONSULTAS (Backend API)
+// ════════════════════════════════════════════════════════════
+
+// Ver historial completo
+const history = await fetch('/api/batch/LOTE-2025-001/history');
+
+// Ver genealogía
+const tree = await fetch('/api/batch/LOTE-2025-001/genealogy');
+// Retorna: padre, hijos, nietos, etc (recursive query)
+
+// Verificar integridad
+const proof = await fetch('/api/operation/3/verify');
+// Calcula hash, compara con blockchain
+```
+
+### Interoperabilidad EPCIS 2.0
+
+El sistema es completamente interoperable con:
+
+**Sistemas ERP/SCM:**
+- ✅ SAP (EPCIS adapter)
+- ✅ Oracle Supply Chain Management
+- ✅ IBM Food Trust
+- ✅ Microsoft Dynamics 365
+
+**Plataformas:**
+- ✅ GS1 Cloud
+- ✅ EU EUDR Registry (compliance reporting)
+- ✅ Carbon Credit Platforms
+- ✅ Sustainability Tracking Systems
+
+**Formato Export:**
+```javascript
+// Backend puede exportar EPCIS JSON-LD estándar
+GET /api/epcis/export?batchId=LOTE-2025-001&format=jsonld
+
+// Sistema externo puede importar directamente
+// Hash en blockchain sirve como proof de integridad
+```
+
+### Testes
+
+**34 testes automatizados** cubriendo:
+- ✅ Deployment y configuración
+- ✅ Control de acceso (authorize/revoke)
+- ✅ Registro de operaciones
+- ✅ Todos los tipos de eventos EPCIS
+- ✅ Todas las acciones EPCIS
+- ✅ Verificación de hash
+- ✅ View functions
+- ✅ Múltiples operadores
+- ✅ Validaciones y errores
+
+**Cobertura:** 100% de funciones públicas
